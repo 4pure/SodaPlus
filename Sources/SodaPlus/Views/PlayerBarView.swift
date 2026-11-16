@@ -175,10 +175,16 @@ struct PlayerBarView: View {
             Circle()
               .fill(theme.accent)
               .frame(width: 40, height: 40)
-            Image(systemName: model.player.isPlaying ? "pause.fill" : "play.fill")
-              .font(.system(size: 14, weight: .bold))
-              .foregroundStyle(theme.accentForeground)
-              .offset(x: model.player.isPlaying ? 0 : 1)
+            if model.isBuffering {
+              ProgressView()
+                .controlSize(.small)
+                .tint(theme.accentForeground)
+            } else {
+              Image(systemName: model.player.isPlaying ? "pause.fill" : "play.fill")
+                .font(.system(size: 14, weight: .bold))
+                .foregroundStyle(theme.accentForeground)
+                .offset(x: model.player.isPlaying ? 0 : 1)
+            }
           }
         }
         .buttonStyle(.plain)

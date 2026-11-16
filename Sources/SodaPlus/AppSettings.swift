@@ -1,5 +1,27 @@
 import Foundation
 
+/// 红 X 关闭主窗口后的行为（对齐常见桌面音乐客户端）。
+enum CloseWindowAction: String, Codable, CaseIterable, Identifiable, Hashable {
+  case continueInBackground
+  case quit
+
+  var id: String { rawValue }
+
+  var title: String {
+    switch self {
+    case .continueInBackground: return "继续后台播放"
+    case .quit: return "退出应用"
+    }
+  }
+
+  var subtitle: String {
+    switch self {
+    case .continueInBackground: return "隐藏 Dock，菜单栏可继续控制播放"
+    case .quit: return "关闭主窗口即完全退出"
+    }
+  }
+}
+
 /// 对齐 SodaM `Settings` / `DEFAULT_SIGNER_*`。
 struct AppSettings: Codable, Equatable {
   var signerURL: String
@@ -14,6 +36,7 @@ struct AppSettings: Codable, Equatable {
   var playMode: PlayMode
   var audioCacheLimitMB: UInt64
   var theme: String
+  var closeWindowAction: CloseWindowAction
 
   enum CodingKeys: String, CodingKey {
     case cookie, quality, volume, theme
@@ -24,6 +47,7 @@ struct AppSettings: Codable, Equatable {
     case volumeBeforeMute = "volume_before_mute"
     case playMode = "play_mode"
     case audioCacheLimitMB = "audio_cache_limit_mb"
+    case closeWindowAction = "close_window_action"
   }
 
   static let defaultSignerURL = "http://103.236.75.83:8899/sign"
@@ -42,8 +66,78 @@ struct AppSettings: Codable, Equatable {
       volumeBeforeMute: 1,
       playMode: .listLoop,
       audioCacheLimitMB: 10 * 1024,
-      theme: "dark"
+      theme: "dark",
+      closeWindowAction: .continueInBackground
     )
+  }
+
+  init(
+    signerURL: String,
+    signerToken: String,
+    cookie: String,
+    deviceID: String,
+    iid: String,
+    fp: String,
+    quality: String,
+    volume: Float,
+    volumeBeforeMute: Float,
+    playMode: PlayMode,
+    audioCacheLimitMB: UInt64,
+    theme: String,
+    closeWindowAction: CloseWindowAction
+  ) {
+    self.signerURL = signerURL
+    self.signerToken = signerToken
+    self.cookie = cookie
+    self.deviceID = deviceID
+    self.iid = iid
+    self.fp = fp
+    self.quality = quality
+    self.volume = volume
+    self.volumeBeforeMute = volumeBeforeMute
+    self.playMode = playMode
+    self.audioCacheLimitMB = audioCacheLimitMB
+    self.theme = theme
+    self.closeWindowAction = closeWindowAction
+  }
+
+  init(from decoder: Decoder) throws {
+    let defaults = AppSettings.default
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    signerURL = try c.decodeIfPresent(String.self, forKey: .signerURL) ?? defaults.signerURL
+    signerToken = try c.decodeIfPresent(String.self, forKey: .signerToken) ?? defaults.signerToken
+    cookie = try c.decodeIfPresent(String.self, forKey: .cookie) ?? defaults.cookie
+    deviceID = try c.decodeIfPresent(String.self, forKey: .deviceID) ?? defaults.deviceID
+    iid = try c.decodeIfPresent(String.self, forKey: .iid) ?? defaults.iid
+    fp = try c.decodeIfPresent(String.self, forKey: .fp) ?? defaults.fp
+    quality = try c.decodeIfPresent(String.self, forKey: .quality) ?? defaults.quality
+    volume = try c.decodeIfPresent(Float.self, forKey: .volume) ?? defaults.volume
+    volumeBeforeMute =
+      try c.decodeIfPresent(Float.self, forKey: .volumeBeforeMute) ?? defaults.volumeBeforeMute
+    playMode = try c.decodeIfPresent(PlayMode.self, forKey: .playMode) ?? defaults.playMode
+    audioCacheLimitMB =
+      try c.decodeIfPresent(UInt64.self, forKey: .audioCacheLimitMB) ?? defaults.audioCacheLimitMB
+    theme = try c.decodeIfPresent(String.self, forKey: .theme) ?? defaults.theme
+    closeWindowAction =
+      try c.decodeIfPresent(CloseWindowAction.self, forKey: .closeWindowAction)
+      ?? defaults.closeWindowAction
+  }
+
+  func encode(to encoder: Encoder) throws {
+    var c = encoder.container(keyedBy: CodingKeys.self)
+    try c.encode(signerURL, forKey: .signerURL)
+    try c.encode(signerToken, forKey: .signerToken)
+    try c.encode(cookie, forKey: .cookie)
+    try c.encode(deviceID, forKey: .deviceID)
+    try c.encode(iid, forKey: .iid)
+    try c.encode(fp, forKey: .fp)
+    try c.encode(quality, forKey: .quality)
+    try c.encode(volume, forKey: .volume)
+    try c.encode(volumeBeforeMute, forKey: .volumeBeforeMute)
+    try c.encode(playMode, forKey: .playMode)
+    try c.encode(audioCacheLimitMB, forKey: .audioCacheLimitMB)
+    try c.encode(theme, forKey: .theme)
+    try c.encode(closeWindowAction, forKey: .closeWindowAction)
   }
 
   var isLoggedIn: Bool {

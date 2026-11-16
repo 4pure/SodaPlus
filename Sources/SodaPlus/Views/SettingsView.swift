@@ -9,10 +9,33 @@ struct SettingsView: View {
   var body: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: Theme.spaceXL) {
-        pageHeader("设置", "账号与音质偏好")
+        pageHeader("设置", "账号、窗口与音质偏好")
 
         sectionTitle("账户")
         accountCard
+
+        sectionTitle("窗口")
+        card {
+          Text("关闭主窗口时")
+            .font(.subheadline.weight(.medium))
+            .foregroundStyle(Theme.text)
+          Picker(
+            "关闭主窗口时",
+            selection: Binding(
+              get: { model.settings.closeWindowAction },
+              set: { model.setCloseWindowAction($0) }
+            )
+          ) {
+            ForEach(CloseWindowAction.allCases) { action in
+              Text(action.title).tag(action)
+            }
+          }
+          .labelsHidden()
+          .pickerStyle(.radioGroup)
+          Text(model.settings.closeWindowAction.subtitle)
+            .font(.caption)
+            .foregroundStyle(Theme.textMuted)
+        }
 
         sectionTitle("音质")
         card {

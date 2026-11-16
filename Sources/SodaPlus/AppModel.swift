@@ -10,6 +10,8 @@ final class AppModel: ObservableObject {
   @Published var account = AccountInfo.empty
   @Published private(set) var statusLine = ""
   @Published var isBusy = false
+  /// 用户点播且本地未缓存时的缓冲态（底栏播放钮转圈）。
+  @Published private(set) var isBuffering = false
   @Published var showQueue = false
   @Published var loginModalOpen = false
   private var statusSeq: UInt64 = 0
@@ -50,6 +52,8 @@ final class AppModel: ObservableObject {
   private var ambientSeq: UInt64 = 0
   private var prefetchTask: Task<Void, Never>?
   private static let prefetchAheadCount = 2
+  /// 同曲同音质进行中的下载，避免预载与点播重复拉流。
+  private var inflightDownloads: [String: InFlightDownload] = [:]
   /// 进入艺人/专辑页之前的导航，用于返回。
   private var detailReturnNav: NavDestination = .home
 
@@ -116,6 +120,7 @@ final class AppModel: ObservableObject {
     {
       if player.isPlaying {
         player.pause()
+        persistSession()
         setStatus("已暂停")
       } else {
         player.resume()
@@ -138,6 +143,7 @@ final class AppModel: ObservableObject {
   func remotePause() {
     guard player.isPlaying else { return }
     player.pause()
+    persistSession()
     setStatus("已暂停")
   }
 
@@ -242,9 +248,12 @@ final class AppModel: ObservableObject {
   }
 
   func bootstrapLoggedIn() async {
-    await refreshAccount()
-    await loadHome(reset: true)
-    await loadLikedIDs()
+    // 先恢复上次队列：有缓存时可秒就绪；推荐流并行拉取，不抢占已恢复的播放队列。
+    let restored = restoreSessionIfPossible()
+    async let accountTask: Void = refreshAccount()
+    async let homeTask: Void = loadHome(reset: true, adoptQueue: !restored)
+    async let likedTask: Void = loadLikedIDs()
+    _ = await (accountTask, homeTask, likedTask)
   }
 
   func refreshAccount() async {
@@ -283,6 +292,8 @@ final class AppModel: ObservableObject {
     likedIDs = []
     player.stop()
     queue.replace([])
+    PlaybackSession.clear()
+    isBuffering = false
     nav = .settings
     setStatus("已退出登录")
   }
@@ -458,6 +469,13 @@ final class AppModel: ObservableObject {
     setStatus("音质已设为 \(label)，从下一首生效")
   }
 
+  func setCloseWindowAction(_ action: CloseWindowAction) {
+    guard settings.closeWindowAction != action else { return }
+    settings.closeWindowAction = action
+    settings.save()
+    setStatus("关闭窗口：\(action.title)")
+  }
+
   func clearAudioCache() {
     do {
       let dir = try AppSettings.audioCacheDir()
@@ -475,7 +493,7 @@ final class AppModel: ObservableObject {
     }
   }
 
-  func loadHome(reset: Bool) async {
+  func loadHome(reset: Bool, adoptQueue: Bool = true) async {
     guard isLoggedIn else { return }
     isBusy = true
     defer { isBusy = false }
@@ -495,8 +513,9 @@ final class AppModel: ObservableObject {
       recommendDidFirstUse = page.didFirstUseTime
       if reset {
         homeTracks = page.tracks
-        if let first = page.tracks.first {
+        if adoptQueue, let first = page.tracks.first {
           queue.replace(page.tracks, start: 0)
+          persistSession(position: 0)
           // 立刻挂 Now Playing，系统控可在下载完成前响应 Play。
           player.present(track: first, isPlaying: false)
           Task { await loadAndPlay(first, autoplay: false) }
@@ -504,6 +523,7 @@ final class AppModel: ObservableObject {
       } else {
         homeTracks.append(contentsOf: page.tracks)
         _ = queue.append(page.tracks)
+        persistSession()
         schedulePrefetch()
       }
       setStatus("推荐 \(homeTracks.count) 首")
@@ -543,6 +563,7 @@ final class AppModel: ObservableObject {
       recommendCounter = page.fetchCounter
       homeTracks = page.tracks
       queue.replace(page.tracks, start: 0)
+      persistSession(position: 0)
       nav = .home
       setStatus("已切换：\(scene.text)")
       if let first = page.tracks.first {
@@ -629,6 +650,7 @@ final class AppModel: ObservableObject {
     } else {
       queue.replace([track], start: 0)
     }
+    persistSession(position: 0)
     Task { await loadAndPlay(track, autoplay: true) }
   }
 
@@ -658,6 +680,7 @@ final class AppModel: ObservableObject {
   func playNext(userInitiated: Bool) {
     let track = userInitiated ? queue.nextUser() : queue.advance()
     guard let track else { return }
+    persistSession(position: 0)
     Task { await loadAndPlay(track, autoplay: true) }
     if homeTracks.count - queue.index < 5, activeScene != nil || nav == .home {
       Task { await loadHome(reset: false) }
@@ -666,6 +689,7 @@ final class AppModel: ObservableObject {
 
   func playPrevious() {
     guard let track = queue.previous() else { return }
+    persistSession(position: 0)
     Task { await loadAndPlay(track, autoplay: true) }
   }
 
@@ -677,25 +701,45 @@ final class AppModel: ObservableObject {
     }
   }
 
-  private func loadAndPlay(_ track: SodaTrack, autoplay: Bool) async {
+  private func loadAndPlay(_ track: SodaTrack, autoplay: Bool, seekTo: Double? = nil) async {
     loadSeq += 1
     let seq = loadSeq
     player.present(track: track, isPlaying: false)
-    setStatus("装载 \(track.title)…")
     updateAmbient(for: track)
+
+    let cached = isCached(track)
+    let showBuffering = autoplay && !cached
+    if showBuffering {
+      isBuffering = true
+      setStatus("正在缓冲…")
+    } else if seq == loadSeq {
+      // 后台预载或已缓存：不刷「装载 xxx」。
+      if isBuffering { isBuffering = false }
+    }
+
     do {
       let fileURL = try await cachedOrDownload(track)
       guard seq == loadSeq else { return }
       player.play(fileURL: fileURL, track: track)
+      if let seekTo, seekTo > 1 {
+        player.seek(to: seekTo)
+      }
       if !autoplay {
         player.pause()
       }
-      setStatus(autoplay ? "正在播放 \(track.title)" : "已就绪 \(track.title)")
+      isBuffering = false
+      if autoplay {
+        setStatus("正在播放 \(track.title)")
+      }
+      persistSession(position: seekTo ?? (autoplay ? 0 : player.position))
       schedulePrefetch()
       await loadLyrics(for: track, seq: seq)
     } catch {
       guard seq == loadSeq else { return }
-      setStatus(error.localizedDescription)
+      isBuffering = false
+      if autoplay {
+        setStatus(error.localizedDescription)
+      }
       print("[SodaPlus] play failed: \(error)")
     }
   }
@@ -703,6 +747,10 @@ final class AppModel: ObservableObject {
   private func cacheURL(for track: SodaTrack) throws -> URL {
     let dir = try AppSettings.audioCacheDir()
     return dir.appendingPathComponent("\(track.id)-\(settings.qualityCacheTag).m4a")
+  }
+
+  private func downloadKey(for track: SodaTrack) -> String {
+    "\(track.id)-\(settings.qualityCacheTag)"
   }
 
   private func isCached(_ track: SodaTrack) -> Bool {
@@ -716,11 +764,32 @@ final class AppModel: ObservableObject {
     if FileManager.default.fileExists(atPath: fileURL.path) {
       return fileURL
     }
-    try await bridge.download(trackID: track.id, to: fileURL, settings: settings)
-    return fileURL
+    let key = downloadKey(for: track)
+    if let existing = inflightDownloads[key] {
+      return try await existing.task.value
+    }
+    let settings = self.settings
+    let task = Task {
+      try await bridge.download(trackID: track.id, to: fileURL, settings: settings)
+      return fileURL
+    }
+    let box = InFlightDownload(task: task)
+    inflightDownloads[key] = box
+    do {
+      let url = try await task.value
+      if inflightDownloads[key] === box {
+        inflightDownloads.removeValue(forKey: key)
+      }
+      return url
+    } catch {
+      if inflightDownloads[key] === box {
+        inflightDownloads.removeValue(forKey: key)
+      }
+      throw error
+    }
   }
 
-  /// 后台预取队列后续曲目（并发 1），切歌尽量走本地缓存。
+  /// 后台预取队列后续曲目（bridge 串行，逐首排队），切歌尽量走本地缓存。
   private func schedulePrefetch() {
     prefetchTask?.cancel()
     let ahead = Array(queue.upcoming.prefix(Self.prefetchAheadCount))
@@ -736,6 +805,34 @@ final class AppModel: ObservableObject {
         }
       }
     }
+  }
+
+  /// 恢复上次队列；当前曲有缓存则静默装载就绪。
+  @discardableResult
+  private func restoreSessionIfPossible() -> Bool {
+    guard let session = PlaybackSession.load(), !session.tracks.isEmpty else {
+      return false
+    }
+    let index = min(max(0, session.index), session.tracks.count - 1)
+    queue.replace(session.tracks, start: index)
+    guard let track = queue.current else { return false }
+    player.present(track: track, isPlaying: false)
+    let seekTo = max(0, session.position)
+    Task { await loadAndPlay(track, autoplay: false, seekTo: seekTo) }
+    return true
+  }
+
+  private func persistSession(position: Double? = nil) {
+    guard !queue.tracks.isEmpty else {
+      PlaybackSession.clear()
+      return
+    }
+    PlaybackSession(
+      tracks: queue.tracks,
+      index: queue.index,
+      position: position ?? player.position,
+      qualityTag: settings.qualityCacheTag
+    ).save()
   }
 
   private func loadLyrics(for track: SodaTrack, seq: UInt64) async {
@@ -812,4 +909,12 @@ final class AppModel: ObservableObject {
     }
   }
 
+}
+
+/// 用引用相等区分同 key 的新旧下载任务，避免失败清理误删后一次。
+private final class InFlightDownload {
+  let task: Task<URL, Error>
+  init(task: Task<URL, Error>) {
+    self.task = task
+  }
 }
