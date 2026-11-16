@@ -1,6 +1,6 @@
 //! JSON CLI / 常驻 serve bridge：SodaPlus ↔ libresoda。
 //!
-//! 扫码登录必须同进程保活 Chromium/CDP cookie jar（对齐 SodaM / libresoda QR-LOGIN.md）。
+//! 扫码登录走 libresoda 纯 HTTP 路径（`enable_http_login`，见 QR-LOGIN.md）；
 //! `serve` 模式：stdin 每行一条 JSON 请求，stdout 回一条 JSON 响应。
 
 use serde::Deserialize;
@@ -121,8 +121,8 @@ fn make_client(cfg: &BridgeConfig) -> libresoda::Soda {
         soda.set_quality_preference(quality);
     }
 
-    #[cfg(feature = "cdp")]
-    soda.enable_cdp_signer();
+    // 纯 HTTP 登录（替代旧 CDP signer）；二次验证才拉起系统浏览器。
+    soda.enable_http_login();
 
     soda
 }
@@ -659,7 +659,7 @@ fn dispatch(soda: &libresoda::Soda, req: &ServeRequest) -> Value {
             }),
             Err(err) => fail_value(
                 err.to_string(),
-                "QR needs Chromium/Chrome (CDP). Or paste Cookie in Settings.",
+                "QR login failed. Or paste Cookie in Settings.",
             ),
         },
         "qr-check" => {
@@ -864,7 +864,7 @@ fn main() -> ExitCode {
     let Some(cmd) = args.next() else {
         eprintln!(
             "usage: sodaplus-bridge <serve|version|me|recommend|...> ...\n\
-             QR login requires: sodaplus-bridge serve  (persistent CDP process)"
+             QR login requires: sodaplus-bridge serve"
         );
         return ExitCode::from(2);
     };
