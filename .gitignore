@@ -1,0 +1,10 @@
+.DS_Store
+.build/
+.swiftpm/
+bridge/target/
+Vendor/libresoda/
+installers/
+*.xcuserstate
+DerivedData/
+.env
+*.m4a
