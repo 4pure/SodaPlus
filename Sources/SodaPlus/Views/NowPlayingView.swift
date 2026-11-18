@@ -221,13 +221,16 @@ private struct LyricRevealLine: View {
   let accent: Color
   let dim: Color
 
+  private static let revealTick: Double = 1.0 / 30.0
+
   var body: some View {
     let active = line.isActive(at: position, nextStart: nextStart)
     if active, line.hasWordTimeline {
       let fraction = line.highlightFraction(at: position)
+      // 双层同字重，避免字重变化导致字形宽度跳变、mask 发颤。
       ZStack(alignment: .leading) {
         Text(line.text)
-          .font(.title3)
+          .font(.title3.weight(.semibold))
           .foregroundStyle(dim)
         Text(line.text)
           .font(.title3.weight(.semibold))
@@ -239,11 +242,12 @@ private struct LyricRevealLine: View {
             }
           }
       }
+      .animation(.linear(duration: Self.revealTick), value: fraction)
     } else {
       Text(line.text)
-        .font(.title3)
-        .fontWeight(active ? .semibold : .regular)
+        .font(.title3.weight(active ? .semibold : .regular))
         .foregroundStyle(active ? accent : dim)
+        .animation(.easeInOut(duration: 0.18), value: active)
     }
   }
 }

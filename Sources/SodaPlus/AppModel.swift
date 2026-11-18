@@ -52,6 +52,8 @@ final class AppModel: ObservableObject {
   private var ambientSeq: UInt64 = 0
   private var prefetchTask: Task<Void, Never>?
   private static let prefetchAheadCount = 2
+  /// 进程内歌词缓存，切回已拉过的曲目可立刻显示。
+  private var lyricCache: [String: [LyricLine]] = [:]
   /// 同曲同音质进行中的下载，避免预载与点播重复拉流。
   private var inflightDownloads: [String: InFlightDownload] = [:]
   /// 进入艺人/专辑页之前的导航，用于返回。
@@ -706,6 +708,8 @@ final class AppModel: ObservableObject {
     let seq = loadSeq
     player.present(track: track, isPlaying: false)
     updateAmbient(for: track)
+    // 歌词与音频并行：先清旧词 / 命中缓存，再后台拉，不堵开播。
+    applyLyricsForPlay(track: track, seq: seq)
 
     let cached = isCached(track)
     let showBuffering = autoplay && !cached
@@ -733,7 +737,6 @@ final class AppModel: ObservableObject {
       }
       persistSession(position: seekTo ?? (autoplay ? 0 : player.position))
       schedulePrefetch()
-      await loadLyrics(for: track, seq: seq)
     } catch {
       guard seq == loadSeq else { return }
       isBuffering = false
@@ -835,11 +838,22 @@ final class AppModel: ObservableObject {
     ).save()
   }
 
+  private func applyLyricsForPlay(track: SodaTrack, seq: UInt64) {
+    if let cached = lyricCache[track.id] {
+      lyricLines = cached
+      return
+    }
+    lyricLines = []
+    Task { await loadLyrics(for: track, seq: seq) }
+  }
+
   private func loadLyrics(for track: SodaTrack, seq: UInt64) async {
     do {
       let raw = try await bridge.lyrics(trackID: track.id, settings: settings)
+      let parsed = LyricParser.parse(raw)
+      lyricCache[track.id] = parsed
       guard seq == loadSeq else { return }
-      lyricLines = LyricParser.parse(raw)
+      lyricLines = parsed
     } catch {
       guard seq == loadSeq else { return }
       lyricLines = []

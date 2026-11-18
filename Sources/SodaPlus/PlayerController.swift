@@ -33,6 +33,8 @@ final class PlayerController: ObservableObject {
   private var publishedPlaying: Bool?
   private var publishedElapsed: Double = -1
   private static let positionJumpSeconds: Double = 2.5
+  /// 歌词走字约 30fps；过稀会一顿一顿，过密徒增 SwiftUI 刷新。
+  private static let positionTickSeconds: Double = 1.0 / 30.0
 
   init() {
     configureAudioSession()
@@ -52,20 +54,22 @@ final class PlayerController: ObservableObject {
     }
 
     timeObserver = player.addPeriodicTimeObserver(
-      forInterval: CMTime(seconds: 0.25, preferredTimescale: 600),
+      forInterval: CMTime(seconds: Self.positionTickSeconds, preferredTimescale: 600),
       queue: .main
     ) { [weak self] time in
-      Task { @MainActor in
-        guard let self else { return }
-        let seconds = CMTimeGetSeconds(time)
+      guard let self else { return }
+      let seconds = CMTimeGetSeconds(time)
+      let total: Double = {
+        guard let item = self.player.currentItem else { return .nan }
+        return CMTimeGetSeconds(item.duration)
+      }()
+      // 回调已在 main queue，直接上主隔离域，避免再包一层 Task 晚一拍。
+      MainActor.assumeIsolated {
         if seconds.isFinite {
           self.position = seconds
         }
-        if let item = self.player.currentItem {
-          let total = CMTimeGetSeconds(item.duration)
-          if total.isFinite, total > 0 {
-            self.duration = total
-          }
+        if total.isFinite, total > 0 {
+          self.duration = total
         }
         self.publishElapsedIfNeeded()
       }
