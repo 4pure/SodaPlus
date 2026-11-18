@@ -148,13 +148,14 @@ struct NowPlayingView: View {
   private var lyricsColumn: some View {
     ScrollViewReader { proxy in
       ScrollView {
-        LazyVStack(alignment: .leading, spacing: 32) {
+        // 歌词行数有限；用 VStack 保证目标行已布局，避免 LazyVStack 下 scrollTo 静默失败。
+        VStack(alignment: .leading, spacing: 32) {
           if model.lyricLines.isEmpty {
             Text("暂无歌词")
               .foregroundStyle(model.theme.lyricDim)
               .padding(.top, 40)
           } else {
-            ForEach(Array(model.lyricLines.enumerated()), id: \.element.id) { index, line in
+            ForEach(Array(model.lyricLines.enumerated()), id: \.offset) { index, line in
               let nextStart =
                 index + 1 < model.lyricLines.count
                 ? model.lyricLines[index + 1].startSeconds
@@ -174,10 +175,29 @@ struct NowPlayingView: View {
         }
         .padding(.vertical, Theme.spaceXL)
       }
+      .onAppear {
+        scrollLyrics(proxy: proxy, to: currentLyricIndex, animated: false)
+      }
       .onChange(of: currentLyricIndex) { _, newValue in
+        scrollLyrics(proxy: proxy, to: newValue, animated: true)
+      }
+      .onChange(of: model.lyricLines.count) { _, _ in
+        scrollLyrics(proxy: proxy, to: currentLyricIndex, animated: false)
+      }
+    }
+  }
+
+  private func scrollLyrics(proxy: ScrollViewProxy, to index: Int, animated: Bool) {
+    guard !model.lyricLines.isEmpty else { return }
+    let clamped = min(max(0, index), model.lyricLines.count - 1)
+    // 等当前帧布局完成后再滚，避免歌词刚加载或首屏时 scrollTo 打空。
+    DispatchQueue.main.async {
+      if animated {
         withAnimation(.easeInOut(duration: 0.25)) {
-          proxy.scrollTo(newValue, anchor: .center)
+          proxy.scrollTo(clamped, anchor: .center)
         }
+      } else {
+        proxy.scrollTo(clamped, anchor: .center)
       }
     }
   }
