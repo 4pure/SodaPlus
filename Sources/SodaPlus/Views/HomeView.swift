@@ -1,58 +1,51 @@
 import SwiftUI
 
+/// 对齐 SodaM / 官方汽水：推荐入口本身是装载态；成功后进入播放页，不展示曲目表。
 struct HomeView: View {
   @ObservedObject var model: AppModel
-
-  private var tracks: [SodaTrack] {
-    model.homeTracks.isEmpty ? model.queue.tracks : model.homeTracks
-  }
+  @EnvironmentObject private var theme: ThemeStore
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 0) {
-      pageHeader
-      TrackListView(
-        tracks: tracks,
-        currentID: model.player.current?.id,
-        likedIDs: model.likedIDs,
-        emptyText: model.isBusy ? "正在准备推荐队列…" : "暂无推荐，登录后自动加载",
-        onPlay: { model.playTrack($0, asQueue: tracks) },
-        onNext: { model.playNextInQueue($0) },
-        onLike: { model.toggleLike($0) },
-        onArtist: { model.openArtistFromTrack($0) },
-        onAlbum: { model.openAlbumFromTrack($0) }
-      )
-    }
-    .background(Theme.surface)
-    .task {
-      if model.isLoggedIn, model.homeTracks.isEmpty {
-        await model.loadHome(reset: true)
-      }
-    }
-  }
-
-  private var pageHeader: some View {
-    HStack(alignment: .bottom) {
-      VStack(alignment: .leading, spacing: Theme.spaceXS) {
-        Text("来自汽水的推荐")
-          .font(.largeTitle.weight(.bold))
-          .foregroundStyle(Theme.text)
-        Text(model.isLoggedIn ? "推荐队列" : "未登录：先在设置里扫码")
+    VStack(spacing: Theme.spaceLG) {
+      Spacer()
+      if let error = model.homeError, !error.isEmpty {
+        Image(systemName: "exclamationmark.triangle")
+          .font(.system(size: 36))
+          .foregroundStyle(theme.warning)
+        Text(error)
           .font(.subheadline)
-          .foregroundStyle(Theme.textMuted)
+          .foregroundStyle(theme.textMuted)
+          .multilineTextAlignment(.center)
+          .padding(.horizontal, Theme.spaceXXL)
+        Button("重试") {
+          Task { await model.retryRecommendation() }
+        }
+        .buttonStyle(SodaSecondaryButtonStyle())
+        .disabled(model.isBusy)
+      } else {
+        ProgressView()
+          .controlSize(.regular)
+          .tint(theme.accent)
+        Text(model.isBusy ? "正在准备推荐队列…" : "推荐队列")
+          .font(.subheadline)
+          .foregroundStyle(theme.textMuted)
       }
       Spacer()
-      if model.isLoggedIn {
-        Button("刷新") { Task { await model.loadHome(reset: true) } }
-          .buttonStyle(SodaSecondaryButtonStyle())
-          .disabled(model.isBusy)
-        Button("加载更多") { Task { await model.loadHome(reset: false) } }
-          .buttonStyle(SodaSecondaryButtonStyle())
-          .disabled(model.isBusy)
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .background(theme.surface)
+    .task {
+      // 仅兜底：侧栏已走 activateRecommendation；此处防止直接落到 .home 时空转。
+      if model.homeError != nil { return }
+      if model.queueIsRecommendation, !model.queue.tracks.isEmpty {
+        model.openNowPlaying()
+        return
+      }
+      if !model.isBusy, model.homeTracks.isEmpty {
+        await model.loadHome(reset: true, adoptQueue: true)
+      } else if model.queue.current != nil || model.player.current != nil {
+        model.openNowPlaying()
       }
     }
-    .padding(.horizontal, Theme.spaceXL)
-    .padding(.top, Theme.spaceXL)
-    .padding(.bottom, Theme.spaceLG)
-    .background(Theme.surface)
   }
 }

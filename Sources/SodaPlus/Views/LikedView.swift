@@ -2,26 +2,33 @@ import SwiftUI
 
 struct LikedView: View {
   @ObservedObject var model: AppModel
+  @EnvironmentObject private var theme: ThemeStore
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
-      HStack {
+      VStack(alignment: .leading, spacing: Theme.spaceMD) {
         VStack(alignment: .leading, spacing: Theme.spaceXS) {
           Text("我喜欢的音乐")
             .font(.largeTitle.weight(.bold))
-            .foregroundStyle(Theme.text)
+            .foregroundStyle(theme.text)
           Text(
             model.likedTracks.isEmpty
               ? (model.isLoggedIn ? "正在读取…" : "未登录：先在设置里扫码")
               : "\(model.likedTracks.count) 首"
           )
           .font(.subheadline)
-          .foregroundStyle(Theme.textMuted)
+          .foregroundStyle(theme.textMuted)
         }
-        Spacer()
-        Button("刷新") { Task { await model.loadLiked() } }
-          .buttonStyle(SodaSecondaryButtonStyle())
-          .disabled(model.isBusy || !model.isLoggedIn)
+
+        HStack(spacing: Theme.spaceMD) {
+          PlayAllButton(count: model.likedTracks.count) {
+            model.playAll(model.likedTracks)
+          }
+          Spacer(minLength: 0)
+          Button("刷新") { Task { await model.loadLiked() } }
+            .buttonStyle(SodaSecondaryButtonStyle())
+            .disabled(!model.isLoggedIn)
+        }
       }
       .padding(Theme.spaceXL)
 
@@ -37,7 +44,7 @@ struct LikedView: View {
         onAlbum: { model.openAlbumFromTrack($0) }
       )
     }
-    .background(Theme.surface)
+    .background(theme.surface)
     .task {
       if model.isLoggedIn { await model.loadLiked() }
     }

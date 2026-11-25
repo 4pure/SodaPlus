@@ -45,12 +45,12 @@ struct TrackListView: View {
         .frame(width: 160, alignment: .leading)
       Text("时长")
         .frame(width: 56, alignment: .trailing)
-        .padding(.trailing, Theme.spaceLG)
+        .padding(.trailing, Theme.spaceMD)
     }
     .font(.caption)
     .foregroundStyle(theme.textFaint)
     .padding(.vertical, Theme.spaceSM)
-    .padding(.horizontal, Theme.spaceMD)
+    .padding(.horizontal, Theme.spaceXL)
     .overlay(alignment: .bottom) {
       Rectangle().fill(theme.border).frame(height: 1)
     }
@@ -58,6 +58,11 @@ struct TrackListView: View {
 
   private func row(index: Int, track: SodaTrack) -> some View {
     let playing = track.id == currentID
+    let dimmed = !track.playable
+    let titleColor: Color = {
+      if playing { return theme.accent }
+      return dimmed ? theme.textFaint : theme.text
+    }()
     return HStack(spacing: 0) {
       Group {
         if playing {
@@ -74,19 +79,25 @@ struct TrackListView: View {
 
       HStack(spacing: Theme.spaceMD) {
         cover(for: track)
+          .opacity(dimmed ? 0.45 : 1)
         VStack(alignment: .leading, spacing: 2) {
           HStack(spacing: Theme.spaceSM) {
             Text(track.title)
-              .foregroundStyle(playing ? theme.accent : theme.text)
+              .foregroundStyle(titleColor)
               .lineLimit(1)
             if track.isVIP {
               Text("VIP")
                 .font(.caption2.weight(.bold))
                 .padding(.horizontal, 5)
                 .padding(.vertical, 1)
-                .background(theme.warning.opacity(0.2))
-                .foregroundStyle(theme.warning)
+                .background(theme.warning.opacity(dimmed ? 0.12 : 0.2))
+                .foregroundStyle(theme.warning.opacity(dimmed ? 0.55 : 1))
                 .clipShape(Capsule())
+            }
+            if dimmed {
+              Text("不可播放")
+                .font(.caption2)
+                .foregroundStyle(theme.textFaint)
             }
           }
         }
@@ -104,35 +115,42 @@ struct TrackListView: View {
 
       linkOrText(
         track.artist.isEmpty ? "—" : track.artist,
-        enabled: onArtist != nil && !track.artistId.isEmpty
+        enabled: onArtist != nil && !track.artistId.isEmpty && !dimmed
       ) {
         onArtist?(track)
       }
       .frame(width: 160, alignment: .leading)
+      .opacity(dimmed ? 0.55 : 1)
 
       linkOrText(
         track.album.isEmpty ? "—" : track.album,
-        enabled: onAlbum != nil && !track.albumId.isEmpty
+        enabled: onAlbum != nil && !track.albumId.isEmpty && !dimmed
       ) {
         onAlbum?(track)
       }
       .frame(width: 160, alignment: .leading)
+      .opacity(dimmed ? 0.55 : 1)
 
       Text(track.durationLabel)
         .font(.caption.monospacedDigit())
         .foregroundStyle(theme.textFaint)
         .frame(width: 56, alignment: .trailing)
-        .padding(.trailing, Theme.spaceLG)
+        .padding(.trailing, Theme.spaceMD)
     }
     .font(.subheadline)
     .padding(.vertical, 8)
-    .padding(.horizontal, Theme.spaceMD)
+    .padding(.horizontal, Theme.spaceXL)
     .background(playing ? theme.surfaceSelected : Color.clear)
     .contentShape(Rectangle())
     .onTapGesture { onPlay(track) }
     .contextMenu {
-      Button("播放") { onPlay(track) }
-      Button("下一首播放") { onNext(track) }
+      if track.playable {
+        Button("播放") { onPlay(track) }
+        Button("下一首播放") { onNext(track) }
+      } else {
+        Button("不可播放") {}
+          .disabled(true)
+      }
       Button(likedIDs.contains(track.id) ? "取消喜欢" : "喜欢") { onLike(track) }
       if onArtist != nil, !track.artistId.isEmpty {
         Button("查看音乐人") { onArtist?(track) }

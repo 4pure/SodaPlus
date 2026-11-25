@@ -12,6 +12,7 @@ struct SodaPlusApp: App {
         .onAppear {
           appDelegate.model = model
           appDelegate.syncCloseWindowActionFromModel()
+          AppDelegate.prepareMainWindowChrome()
           AppDelegate.showMainWindows()
         }
         .onChange(of: model.settings.closeWindowAction) { _, _ in
@@ -22,6 +23,13 @@ struct SodaPlusApp: App {
     .defaultSize(width: 980, height: 640)
     .commands {
       CommandGroup(replacing: .newItem) {}
+      CommandGroup(replacing: .appSettings) {
+        Button("设置…") {
+          AppDelegate.showMainWindows()
+          model.selectNav(.settings)
+        }
+        .keyboardShortcut(",", modifiers: .command)
+      }
       CommandMenu("播放") {
         Button(model.player.isPlaying ? "暂停" : "播放") {
           model.togglePlayPause()
@@ -34,7 +42,7 @@ struct SodaPlusApp: App {
       }
     }
 
-    MenuBarExtra("SodaPlus", systemImage: "music.note") {
+    MenuBarExtra {
       if let track = model.player.current {
         Text(track.title).font(.headline)
         Text(track.artist).foregroundStyle(.secondary)
@@ -52,6 +60,9 @@ struct SodaPlusApp: App {
       Button("退出 SodaPlus") {
         NSApp.terminate(nil)
       }
+    } label: {
+      AppIcons.trayLabel
+        .accessibilityLabel("SodaPlus")
     }
   }
 }
@@ -69,10 +80,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       name: NSWindow.willCloseNotification,
       object: nil
     )
+    NotificationCenter.default.addObserver(
+      self,
+      selector: #selector(windowDidBecomeKey(_:)),
+      name: NSWindow.didBecomeKeyNotification,
+      object: nil
+    )
   }
 
   func applicationWillTerminate(_ notification: Notification) {
     NotificationCenter.default.removeObserver(self)
+  }
+
+  @objc private func windowDidBecomeKey(_ notification: Notification) {
+    guard let window = notification.object as? NSWindow, Self.isMainContentWindow(window) else {
+      return
+    }
+    Self.prepareMainWindowChrome()
   }
 
   nonisolated func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool
@@ -108,6 +132,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     closeWindowAction = model?.settings.closeWindowAction ?? .continueInBackground
   }
 
+  /// 隐藏标题栏 + 内容全出血；分隔线关闭、红绿灯放大由 `WindowChromeView` 持续施加。
+  static func prepareMainWindowChrome() {
+    for window in NSApp.windows where isMainContentWindow(window) {
+      window.titleVisibility = .hidden
+      window.titlebarAppearsTransparent = true
+      if !window.styleMask.contains(.fullSizeContentView) {
+        window.styleMask.insert(.fullSizeContentView)
+      }
+      window.titlebarSeparatorStyle = .none
+      window.isMovableByWindowBackground = true
+    }
+  }
+
   /// 显示主窗口，并恢复 Dock 图标（从 accessory 切回 regular）。
   static func showMainWindows() {
     NSApp.setActivationPolicy(.regular)
@@ -115,6 +152,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // 从 accessory 切回 regular 后，系统菜单栏偶发不刷新；轻推一次。
     NSMenu.setMenuBarVisible(false)
     NSMenu.setMenuBarVisible(true)
+
+    prepareMainWindowChrome()
 
     var ordered = false
     for window in NSApp.windows where isMainContentWindow(window) {
