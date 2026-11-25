@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 对齐 SodaM 播放页：封面约 min(40vh,30vw)，歌词列逐字高亮。
+/// 对齐汽水播放页：左区大封面+信息居中，右列歌词逐字高亮。
 struct NowPlayingView: View {
   @ObservedObject var model: AppModel
 
@@ -17,74 +17,36 @@ struct NowPlayingView: View {
 
   var body: some View {
     GeometryReader { geo in
-      let coverW = min(geo.size.height * 0.40, geo.size.width * 0.30)
-      let lyricW = min(500, max(300, geo.size.width * 0.30))
+      // 歌词列略宽；左区吃剩余宽度，封面+信息在左区内居中（对齐汽水）。
+      let lyricW = min(540, max(320, geo.size.width * 0.34))
+      let hPad: CGFloat = 32
+      let gap: CGFloat = 36
+      let leftW = max(0, geo.size.width - lyricW - gap - hPad * 2)
+      // 预留歌名/VIP/艺人高度；封面约满额的 75%。
+      let infoReserve: CGFloat = 128
+      let coverW =
+        min(
+          max(200, geo.size.height - infoReserve),
+          leftW * 0.86,
+          geo.size.height * 0.72
+        ) * 0.75
 
-      HStack(spacing: 50) {
-        Spacer(minLength: 0)
+      HStack(alignment: .center, spacing: gap) {
         coverColumn(width: coverW)
-        Group {
-          if model.showQueue {
-            embeddedQueue
-          } else {
-            lyricsColumn
-          }
-        }
-        .frame(width: lyricW)
-        Spacer(minLength: 0)
+          .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        lyricsColumn
+          .frame(width: lyricW)
+          .frame(maxHeight: .infinity)
       }
-      .padding(.horizontal, 50)
+      .padding(.horizontal, hPad)
       .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
     .background(model.theme.surface)
   }
 
-  /// 对齐 SodaM：播放页内嵌队列替换歌词列，不走右侧抽屉。
-  private var embeddedQueue: some View {
-    VStack(alignment: .leading, spacing: 0) {
-      HStack {
-        Text("播放队列 · \(model.queue.tracks.count) 首")
-          .font(.caption)
-          .foregroundStyle(model.theme.textFaint)
-        Spacer()
-        Button {
-          model.showQueue = false
-        } label: {
-          Image(systemName: "xmark")
-            .font(.system(size: 12, weight: .medium))
-            .foregroundStyle(model.theme.textMuted)
-        }
-        .buttonStyle(.plain)
-      }
-      .padding(.bottom, Theme.spaceMD)
-
-      ScrollView {
-        LazyVStack(alignment: .leading, spacing: Theme.spaceSM) {
-          ForEach(Array(model.queue.tracks.enumerated()), id: \.element.id) { index, item in
-            let playing = item.id == track?.id
-            Button {
-              model.playTrack(item, asQueue: model.queue.tracks)
-            } label: {
-              HStack {
-                Text(item.title)
-                  .foregroundStyle(playing ? model.theme.accent : model.theme.text)
-                  .lineLimit(1)
-                Spacer()
-                Text(item.durationLabel)
-                  .font(.caption)
-                  .foregroundStyle(model.theme.textFaint)
-              }
-            }
-            .buttonStyle(.plain)
-            .padding(.vertical, 4)
-          }
-        }
-      }
-    }
-  }
-
   private func coverColumn(width: CGFloat) -> some View {
-    VStack(spacing: Theme.spaceLG) {
+    let radius = max(Theme.radiusCard, width * 0.045)
+    return VStack(alignment: .leading, spacing: Theme.spaceLG) {
       Group {
         if let url = track?.coverURL {
           AsyncImage(url: url) { phase in
@@ -99,55 +61,68 @@ struct NowPlayingView: View {
         }
       }
       .frame(width: width, height: width)
-      .clipShape(RoundedRectangle(cornerRadius: Theme.radiusCard, style: .continuous))
-      .shadow(color: .black.opacity(0.4), radius: 28, y: 14)
+      .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+      .shadow(color: .black.opacity(0.32), radius: 36, y: 18)
 
-      Text(track?.title ?? "未在播放")
-        .font(.title2.weight(.bold))
-        .foregroundStyle(model.theme.text)
-        .multilineTextAlignment(.center)
+      // 对齐汽水：曲名行左标题/VIP、右爱心（可视上缘对齐曲名），下行艺人。
+      VStack(alignment: .leading, spacing: Theme.spaceSM) {
+        HStack(alignment: .top, spacing: Theme.spaceSM) {
+          Text(track?.title ?? "未在播放")
+            .font(.system(size: 22, weight: .regular))
+            .foregroundStyle(model.theme.text)
+            .multilineTextAlignment(.leading)
+            .lineLimit(2)
+            .layoutPriority(1)
 
-      if let track {
-        HStack(spacing: Theme.spaceSM) {
-          if track.isVIP {
+          if let track, track.isVIP {
             Text("VIP")
-              .font(.caption2.weight(.bold))
-              .padding(.horizontal, 6)
-              .padding(.vertical, 2)
+              .font(.caption.weight(.bold))
+              .padding(.horizontal, 7)
+              .padding(.vertical, 3)
               .background(model.theme.warning.opacity(0.2))
               .foregroundStyle(model.theme.warning)
               .clipShape(Capsule())
+              .padding(.top, 4)
           }
+
+          Spacer(minLength: Theme.spaceSM)
+
+          if let track {
+            Button {
+              model.toggleLike(track)
+            } label: {
+              Image(systemName: model.likedIDs.contains(track.id) ? "heart.fill" : "heart")
+                .font(.system(size: 24, weight: .regular))
+                .foregroundStyle(
+                  model.likedIDs.contains(track.id) ? model.theme.accent : model.theme.text
+                )
+                // SF Symbol 顶部略有留白；微上提，避免高过曲名。
+                .offset(y: 1)
+            }
+            .buttonStyle(.plain)
+            .help(model.likedIDs.contains(track.id) ? "取消喜欢" : "喜欢")
+          }
+        }
+
+        if let track, !track.artist.isEmpty {
           Button {
-            model.toggleLike(track)
+            model.openArtistFromTrack(track)
           } label: {
-            Image(systemName: model.likedIDs.contains(track.id) ? "heart.fill" : "heart")
-              .foregroundStyle(
-                model.likedIDs.contains(track.id) ? model.theme.accent : model.theme.textMuted
-              )
+            Text(track.artist)
+              .font(.system(size: 16, weight: .medium))
+              .foregroundStyle(model.theme.textMuted)
           }
           .buttonStyle(.plain)
+          .disabled(track.artistId.isEmpty)
         }
       }
-
-      if let track, !track.artist.isEmpty {
-        Button {
-          model.openArtistFromTrack(track)
-        } label: {
-          Text(track.artist)
-            .font(.title3)
-            .foregroundStyle(model.theme.textMuted)
-        }
-        .buttonStyle(.plain)
-        .disabled(track.artistId.isEmpty)
-      }
+      .frame(width: width, alignment: .leading)
     }
-    .frame(width: width + 20)
   }
 
   private var lyricsColumn: some View {
     ScrollViewReader { proxy in
-      ScrollView {
+      ScrollView(showsIndicators: false) {
         // 歌词行数有限；用 VStack 保证目标行已布局，避免 LazyVStack 下 scrollTo 静默失败。
         VStack(alignment: .leading, spacing: 32) {
           if model.lyricLines.isEmpty {
@@ -207,7 +182,7 @@ struct NowPlayingView: View {
       .fill(model.theme.surfaceElevated)
       .overlay {
         Image(systemName: "music.note")
-          .font(.system(size: 48))
+          .font(.system(size: 52))
           .foregroundStyle(model.theme.textFaint)
       }
   }
