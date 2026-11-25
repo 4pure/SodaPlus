@@ -1,54 +1,100 @@
 import SwiftUI
 
-/// 对齐 SodaM `ui/theme.rs`：Dark 色板 + 封面 ambient 染色。
+/// 外观模式，存 `config.json` 的 `theme` 字符串（`light` / `dark`）。
+enum AppearanceMode: String, CaseIterable, Identifiable, Hashable, Codable {
+  case light
+  case dark
+
+  var id: String { rawValue }
+
+  var title: String {
+    switch self {
+    case .light: return "浅色"
+    case .dark: return "深色"
+    }
+  }
+
+  var colorScheme: ColorScheme {
+    switch self {
+    case .light: return .light
+    case .dark: return .dark
+    }
+  }
+
+  static func from(stored: String) -> AppearanceMode {
+    let value = stored.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    return AppearanceMode(rawValue: value) ?? .dark
+  }
+}
+
+/// 对齐 SodaM `ui/theme.rs`：Light / Dark 色板 + 封面 ambient 染色。
 @MainActor
 final class ThemeStore: ObservableObject {
+  @Published var mode: AppearanceMode = .dark
   @Published private(set) var ambient: AmbientColor.RGB?
+
+  func setMode(_ mode: AppearanceMode) {
+    guard self.mode != mode else { return }
+    self.mode = mode
+  }
 
   func setAmbient(_ rgb: AmbientColor.RGB?) {
     ambient = rgb
   }
 
+  var preferredColorScheme: ColorScheme { mode.colorScheme }
+
   // MARK: Colors
 
-  var bg: Color { wash(base: Color(hex: 0x0A0A0A), amount: 0.50) }
-  var surface: Color { wash(base: Color(hex: 0x101010), amount: 0.50) }
-  var surfaceElevated: Color { wash(base: Color(hex: 0x171717), amount: 0.50) }
-  var surfaceHover: Color { wash(base: Color(hex: 0x232323), amount: 0.50) }
-  var surfaceSelected: Color { wash(base: Color(hex: 0x303030), amount: 0.50) }
-  var border: Color { wash(base: Color(hex: 0x262626), amount: 0.40) }
-  var text: Color { wash(base: Color(hex: 0xFAFAFA), amount: 0.12) }
-  var textMuted: Color { wash(base: Color(hex: 0x737373), amount: 0.12) }
-  var textFaint: Color { wash(base: Color(hex: 0x525252), amount: 0.12) }
+  var bg: Color { wash(base: palette.bg) }
+  var surface: Color { wash(base: palette.surface) }
+  var surfaceElevated: Color { wash(base: palette.surfaceElevated) }
+  var surfaceHover: Color { wash(base: palette.surfaceHover) }
+  var surfaceSelected: Color { wash(base: palette.surfaceSelected) }
+  var border: Color { wash(base: palette.border, amount: 0.40) }
+  var text: Color { wash(base: palette.text, amount: 0.12) }
+  var textMuted: Color { wash(base: palette.textMuted, amount: 0.12) }
+  var textFaint: Color { wash(base: palette.textFaint, amount: 0.12) }
 
   var accent: Color {
-    guard let ambient else { return Color(hex: 0xFAFAFA) }
-    return accentFrom(ambient, lightness: 0.72)
+    guard let ambient else { return palette.accent }
+    return accentFrom(ambient, lightness: palette.accentLightness)
   }
 
   var accentForeground: Color {
-    guard ambient != nil else { return Color(hex: 0x171717) }
-    return Color(hex: 0x0A0A0A)
+    guard ambient != nil else { return palette.accentForeground }
+    return mode == .dark ? Color(hex: 0x0A0A0A) : Color(hex: 0xFAFAFA)
   }
 
-  var accentSoft: Color { accent.opacity(0.16) }
+  var accentSoft: Color { accent.opacity(mode == .dark ? 0.16 : 0.12) }
 
   /// 歌词未点亮：同色相低饱和（对齐 lyric_dim）。
   var lyricDim: Color {
     guard let ambient else { return textMuted }
     let (h, s, l) = rgbToHSL(ambient.r, ambient.g, ambient.b)
     let sat = min(0.6, max(0, s) * 0.55) * 0.16
-    let light = max(0.24, l * 0.62)
+    let light: Double
+    switch mode {
+    case .dark:
+      light = max(0.24, l * 0.62)
+    case .light:
+      light = min(0.55, max(0.38, l * 0.72))
+    }
     return Color(hsl: h, saturation: sat, lightness: light)
   }
 
   var warning: Color { Color(hex: 0xF5A524) }
   var danger: Color { Color(hex: 0xF31260) }
 
-  private func wash(base: Color, amount: Double) -> Color {
+  private var palette: Palette {
+    mode == .dark ? .dark : .light
+  }
+
+  private func wash(base: Color, amount: Double = 0.50) -> Color {
     guard let ambient else { return base }
+    let strength = mode == .dark ? amount * 0.35 : amount * 0.22
     return base.mixed(
-      with: Color(red: ambient.r, green: ambient.g, blue: ambient.b), amount: amount * 0.35)
+      with: Color(red: ambient.r, green: ambient.g, blue: ambient.b), amount: strength)
       ?? base
   }
 
@@ -80,11 +126,70 @@ final class ThemeStore: ObservableObject {
   }
 }
 
-/// UI-SPEC 尺寸 + 无 ThemeStore 时的中性色回退。
+private struct Palette {
+  let bg: Color
+  let surface: Color
+  let surfaceElevated: Color
+  let surfaceHover: Color
+  let surfaceSelected: Color
+  let border: Color
+  let text: Color
+  let textMuted: Color
+  let textFaint: Color
+  let accent: Color
+  let accentForeground: Color
+  let accentLightness: Double
+
+  static let dark = Palette(
+    bg: Color(hex: 0x0A0A0A),
+    surface: Color(hex: 0x101010),
+    surfaceElevated: Color(hex: 0x171717),
+    surfaceHover: Color(hex: 0x232323),
+    surfaceSelected: Color(hex: 0x303030),
+    border: Color(hex: 0x262626),
+    text: Color(hex: 0xFAFAFA),
+    textMuted: Color(hex: 0x737373),
+    textFaint: Color(hex: 0x525252),
+    accent: Color(hex: 0xFAFAFA),
+    accentForeground: Color(hex: 0x171717),
+    accentLightness: 0.72
+  )
+
+  static let light = Palette(
+    bg: Color(hex: 0xF4F4F5),
+    surface: Color(hex: 0xFAFAFA),
+    surfaceElevated: Color(hex: 0xFFFFFF),
+    surfaceHover: Color(hex: 0xE4E4E7),
+    surfaceSelected: Color(hex: 0xD4D4D8),
+    border: Color(hex: 0xE4E4E7),
+    text: Color(hex: 0x18181B),
+    textMuted: Color(hex: 0x71717A),
+    textFaint: Color(hex: 0xA1A1AA),
+    accent: Color(hex: 0x18181B),
+    accentForeground: Color(hex: 0xFAFAFA),
+    accentLightness: 0.38
+  )
+}
+
+/// UI-SPEC 尺寸；静态色仅作无 ThemeStore 时的深色回退。
 enum Theme {
   static let sidebarWidth: CGFloat = 216
-  static let playerHeight: CGFloat = 76
-  static let playerThumb: CGFloat = 48
+  static let queueDrawerWidth: CGFloat = 360
+  /// 对齐汽水底栏视觉体量（封面 + 控件 + 顶缘细进度条）。
+  static let playerHeight: CGFloat = 88
+  static let playerThumb: CGFloat = 56
+  static let playerPlayButton: CGFloat = 48
+  /// 顶栏大致高度（消息浮层 / 队列避让）：主区顶距 + 控件 + 底垫。
+  static var titleChromeHeight: CGFloat { chromeTopInset + chromeControlSize + spaceSM }
+  /// 主区顶栏相对窗顶内边距（搜索/头像与红绿灯带对齐）。
+  static let chromeTopInset: CGFloat = 22
+  /// 侧栏内容顶距：红绿灯整带之下再留空，避免品牌贴按钮。
+  static let sidebarTopInset: CGFloat = 64
+  /// 侧栏品牌图标边长；「SodaPlus」字号略小于此。
+  static let sidebarBrandIcon: CGFloat = 36
+  static let sidebarBrandFontSize: CGFloat = 22
+  /// 顶栏搜索 / 头像同径。
+  static let chromeControlSize: CGFloat = 32
   static let windowMinWidth: CGFloat = 900
   static let windowMinHeight: CGFloat = 560
   static let spaceXS: CGFloat = 4

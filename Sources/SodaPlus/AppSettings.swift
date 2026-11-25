@@ -1,6 +1,6 @@
 import Foundation
 
-/// 红 X 关闭主窗口后的行为（对齐常见桌面音乐客户端）。
+/// 红 X 关闭主窗口后的行为（对齐汽水「关闭主面板」：托盘继续 / 退出）。
 enum CloseWindowAction: String, Codable, CaseIterable, Identifiable, Hashable {
   case continueInBackground
   case quit
@@ -9,8 +9,8 @@ enum CloseWindowAction: String, Codable, CaseIterable, Identifiable, Hashable {
 
   var title: String {
     switch self {
-    case .continueInBackground: return "继续后台播放"
-    case .quit: return "退出应用"
+    case .continueInBackground: return "最小化到菜单栏"
+    case .quit: return "退出程序"
     }
   }
 
@@ -18,6 +18,72 @@ enum CloseWindowAction: String, Codable, CaseIterable, Identifiable, Hashable {
     switch self {
     case .continueInBackground: return "隐藏 Dock，菜单栏可继续控制播放"
     case .quit: return "关闭主窗口即完全退出"
+    }
+  }
+}
+
+/// 音质意图，对齐 libresoda / SodaM 档位表（存 `config.json` 的 `quality` 字符串）。
+enum QualityPreference: String, CaseIterable, Identifiable, Hashable {
+  case auto
+  case hires
+  case lossless
+  case dolby
+  case highest
+  case medium
+  case low
+
+  var id: String { rawValue }
+
+  var title: String {
+    switch self {
+    case .auto: return "自动"
+    case .hires: return "Hi-Res"
+    case .lossless: return "无损音质"
+    case .dolby: return "杜比全景声"
+    case .highest: return "极高音质"
+    case .medium: return "较高音质"
+    case .low: return "流畅"
+    }
+  }
+
+  var hint: String {
+    switch self {
+    case .auto: return "不设上限，按账号权益和单曲可用档位取最高"
+    case .hires: return "优先 Hi-Res 无损；没有可用档位时由服务端回退"
+    case .lossless: return "优先无损；没有可用无损时由服务端回退"
+    case .dolby: return "优先杜比全景声；没有可用档位时由服务端回退"
+    case .highest: return "优先极高（≈320k）；没有可用档位时由服务端回退"
+    case .medium: return "优先较高；没有可用档位时由服务端回退"
+    case .low: return "优先流畅（≈128k）；没有可用档位时由服务端回退"
+    }
+  }
+
+  static func from(stored: String) -> QualityPreference {
+    let q = stored.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    if q.isEmpty || q == "best" { return .auto }
+    return QualityPreference(rawValue: q) ?? .auto
+  }
+}
+
+/// 设置页左侧分类（对齐汽水音乐设置侧栏）。
+enum SettingsCategory: String, CaseIterable, Identifiable, Hashable {
+  case playback
+  case shortcuts
+  case usage
+  case account
+  case advanced
+  case about
+
+  var id: String { rawValue }
+
+  var title: String {
+    switch self {
+    case .playback: return "播放相关"
+    case .shortcuts: return "快捷键"
+    case .usage: return "使用相关"
+    case .account: return "账户"
+    case .advanced: return "高级"
+    case .about: return "关于"
     }
   }
 }
@@ -214,9 +280,21 @@ struct AppSettings: Codable, Equatable {
     return env
   }
 
+  var qualityPreference: QualityPreference {
+    QualityPreference.from(stored: quality)
+  }
+
+  var appearanceMode: AppearanceMode {
+    get { AppearanceMode.from(stored: theme) }
+    set { theme = newValue.rawValue }
+  }
+
   var qualityCacheTag: String {
-    let q = quality.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-    if q.isEmpty || q == "auto" || q == "best" { return "auto" }
-    return q
+    let q = qualityPreference
+    return q == .auto ? "auto" : q.rawValue
+  }
+
+  var audioCacheLimitBytes: UInt64 {
+    audioCacheLimitMB * 1024 * 1024
   }
 }
