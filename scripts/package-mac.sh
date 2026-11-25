@@ -24,13 +24,22 @@ case "$ARCH" in
     ;;
 esac
 
-STEPS=3
+STEPS=4
 STEP=1
 step() {
   echo
   echo "======== [$STEP/$STEPS] $1 ========"
   echo
   STEP=$((STEP + 1))
+}
+
+print_build_result() {
+  local out_dir="$1"
+  local artifact="$2"
+  echo
+  echo "产物目录：${out_dir}"
+  echo "可执行文件：${artifact}"
+  echo
 }
 
 step "build rust bridge"
@@ -67,6 +76,8 @@ cat > "$APP/Contents/Info.plist" <<EOF
   <string>6.0</string>
   <key>CFBundleName</key>
   <string>SodaPlus</string>
+  <key>CFBundleIconFile</key>
+  <string>AppIcon</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
@@ -83,13 +94,27 @@ cat > "$APP/Contents/Info.plist" <<EOF
 </plist>
 EOF
 
+ICON_DIR="$ROOT/Sources/SodaPlus/Resources"
+cp "$ICON_DIR/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
+cp "$ICON_DIR/TrayIcon-16.png" "$APP/Contents/Resources/TrayIcon-16.png"
+cp "$ICON_DIR/TrayIcon-32.png" "$APP/Contents/Resources/TrayIcon-32.png"
+
 cp "$BIN" "$APP/Contents/MacOS/SodaPlus"
 cp "$BRIDGE" "$APP/Contents/MacOS/sodaplus-bridge"
+BIN_DIR="$(dirname "$BIN")"
+RESOURCE_BUNDLE="$BIN_DIR/SodaPlus_SodaPlus.bundle"
+# SPM Bundle.module 在 .app 内只查 Bundle.main.resourceURL（Contents/Resources），
+# 不要放到 Contents/MacOS，否则启动即 fatalError: unable to find bundle named SodaPlus_SodaPlus。
+if [[ -d "$RESOURCE_BUNDLE" ]]; then
+  rm -rf "$APP/Contents/Resources/SodaPlus_SodaPlus.bundle"
+  cp -R "$RESOURCE_BUNDLE" "$APP/Contents/Resources/SodaPlus_SodaPlus.bundle"
+fi
 chmod +x "$APP/Contents/MacOS/SodaPlus" "$APP/Contents/MacOS/sodaplus-bridge"
+
+step "codesign SodaPlus.app"
 codesign --force --deep --sign - "$APP" >/dev/null
 
-echo
-echo "产物：$APP"
+print_build_result "$OUT_DIR" "$APP"
 if [[ "$APP_ONLY" -eq 0 ]]; then
   echo "（未打 DMG；需要时可再加 dmg 步骤）"
 fi
