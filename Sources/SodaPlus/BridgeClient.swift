@@ -1,6 +1,6 @@
 import Foundation
 
-/// 常驻 `sodaplus-bridge serve`：扫码登录必须同进程保活 CDP（对齐 SodaM / libresoda）。
+/// 常驻 `sodaplus-bridge serve`：扫码登录必须同进程保活会话（对齐 SodaM / libresoda）。
 actor BridgeClient {
   private let bridgeURL: URL
   private var process: Process?
@@ -87,12 +87,38 @@ actor BridgeClient {
     return try decode(Envelope.self, from: await call(cmd: "liked", settings: settings)).tracks
   }
 
+  func douyinLiked(settings: AppSettings) async throws -> [SodaTrack] {
+    struct Envelope: Codable { var tracks: [SodaTrack] }
+    return try decode(
+      Envelope.self,
+      from: await call(cmd: "douyin-liked", settings: settings)
+    ).tracks
+  }
+
+  func recent(settings: AppSettings) async throws -> [SodaTrack] {
+    struct Envelope: Codable { var tracks: [SodaTrack] }
+    return try decode(Envelope.self, from: await call(cmd: "recent", settings: settings)).tracks
+  }
+
   func myPlaylists(settings: AppSettings) async throws -> [PlaylistItem] {
     struct Envelope: Codable { var playlists: [PlaylistItem] }
     return try decode(
       Envelope.self,
       from: await call(cmd: "my-playlists", settings: settings)
     ).playlists
+  }
+
+  func createPlaylist(name: String, settings: AppSettings) async throws -> PlaylistItem {
+    struct Envelope: Codable {
+      var id: String
+      var title: String
+    }
+    let env = try decode(
+      Envelope.self,
+      from: await call(cmd: "create-playlist", settings: settings, extra: ["query": name])
+    )
+    return PlaylistItem(
+      id: env.id, title: env.title.isEmpty ? name : env.title, cover: "", trackCount: 0)
   }
 
   func playlistTracks(id: String, settings: AppSettings) async throws -> [SodaTrack] {
@@ -173,6 +199,7 @@ actor BridgeClient {
     )
   }
 
+  /// 二次验证页地址（本机 127.0.0.1 security_host）；由 App 内嵌 WebView 打开。
   func qrOpenVerify(token: String, settings: AppSettings) async throws -> String {
     struct Envelope: Codable { var url: String }
     return try decode(

@@ -144,7 +144,229 @@ fn song_to_track(song: &libresoda::Song) -> Value {
         "cover": song.cover,
         "duration_ms": duration_ms,
         "is_vip": song.is_vip,
+        // 汽水侧灰色不可播 → is_invalid；客户端列表灰显并跳过点播。
+        "playable": !song.is_invalid,
     })
+}
+
+/// 与 libresoda `Track::is_unplayable` 对齐，供历史等原始 JSON 路径使用。
+fn track_json_playable(track: &Value) -> bool {
+    let media = track
+        .get("media_type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("track")
+        .trim();
+    if media == "ugc_clip" {
+        return false;
+    }
+    let status = track.get("status").and_then(|v| v.as_i64()).unwrap_or(0);
+    if status == 30 {
+        return false;
+    }
+    let share_status = track
+        .get("share_status")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    if share_status == 1 {
+        return false;
+    }
+    true
+}
+
+/// 按歌单名优先级查找（先精确匹配，再 contains）；避免「抖音收藏」误命中「喜欢」。
+#[cfg(feature = "libresoda")]
+fn load_named_playlist_tracks(
+    soda: &libresoda::Soda,
+    name_hints: &[&str],
+) -> Result<(String, Vec<Value>), String> {
+    let mut playlists = soda
+        .get_my_playlists("", 50)
+        .map(|page| page.playlists)
+        .unwrap_or_default();
+    if playlists.is_empty() {
+        playlists = soda
+            .get_user_playlists(1, 50)
+            .map_err(|err| err.to_string())?;
+    }
+    let chosen = name_hints
+        .iter()
+        .find_map(|hint| {
+            playlists
+                .iter()
+                .find(|p| p.name == *hint)
+                .or_else(|| playlists.iter().find(|p| p.name.contains(hint)))
+        })
+        .ok_or_else(|| format!("playlist_not_found:{}", name_hints.join("|")))?;
+    let songs = soda
+        .get_playlist_songs(&chosen.id)
+        .map_err(|err| err.to_string())?;
+    Ok((
+        chosen.id.clone(),
+        songs.iter().map(song_to_track).collect(),
+    ))
+}
+
+/// 历史播放回包字段随版本变动；兼容 media_resources / media / items。
+#[cfg(feature = "libresoda")]
+fn recent_tracks(value: &Value) -> Vec<Value> {
+    let mut tracks = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let arrays = [
+        value.get("media_resources"),
+        value.get("media"),
+        value.get("items"),
+        value.get("list"),
+    ];
+    for arr in arrays.into_iter().flatten().filter_map(|v| v.as_array()) {
+        for item in arr {
+            if let Some(track) = track_value_from_recent_item(item) {
+                let id = track
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                if id.is_empty() || !seen.insert(id) {
+                    continue;
+                }
+                tracks.push(track);
+            }
+        }
+        if !tracks.is_empty() {
+            break;
+        }
+    }
+    tracks
+}
+
+#[cfg(feature = "libresoda")]
+fn track_value_from_recent_item(item: &Value) -> Option<Value> {
+    if let Some(track) = item.pointer("/entity/track_wrapper/track") {
+        return track_object_to_value(track);
+    }
+    if let Some(track) = item.pointer("/track_wrapper/track") {
+        return track_object_to_value(track);
+    }
+    if let Some(track) = item.get("track") {
+        return track_object_to_value(track);
+    }
+    if item.get("type").and_then(|v| v.as_str()) == Some("track") {
+        if let Some(entity) = item.get("entity") {
+            if let Some(track) = entity.pointer("/track_wrapper/track").or_else(|| entity.get("track"))
+            {
+                return track_object_to_value(track);
+            }
+        }
+    }
+    // 扁平曲目对象
+    if item.get("id").is_some()
+        && (item.get("name").is_some() || item.get("title").is_some())
+    {
+        return track_object_to_value(item);
+    }
+    None
+}
+
+#[cfg(feature = "libresoda")]
+fn track_object_to_value(track: &Value) -> Option<Value> {
+    let id = track
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if id.is_empty() {
+        return None;
+    }
+    let title = track
+        .get("name")
+        .or_else(|| track.get("title"))
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    let artist = track
+        .get("artists")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|a| a.get("name").and_then(|v| v.as_str()))
+                .collect::<Vec<_>>()
+                .join(" / ")
+        })
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            track
+                .get("artist")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        })
+        .unwrap_or_default();
+    let artist_id = track
+        .get("artists")
+        .and_then(|v| v.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|a| a.get("id").and_then(|v| v.as_str()))
+        .unwrap_or_default();
+    let album = track
+        .pointer("/album/name")
+        .and_then(|v| v.as_str())
+        .or_else(|| track.get("album").and_then(|v| v.as_str()))
+        .unwrap_or_default();
+    let album_id = track
+        .pointer("/album/id")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    let duration_ms = track
+        .get("duration")
+        .and_then(|v| v.as_f64())
+        .map(|d| {
+            if d > 10_000.0 {
+                d.round() as u64
+            } else {
+                (d * 1000.0).round() as u64
+            }
+        })
+        .or_else(|| {
+            track
+                .get("duration_ms")
+                .and_then(|v| v.as_u64())
+        })
+        .unwrap_or(0);
+    let is_vip = track
+        .pointer("/label_info/only_vip_playable")
+        .and_then(|v| v.as_bool())
+        .or_else(|| track.get("is_vip").and_then(|v| v.as_bool()))
+        .unwrap_or(false);
+    let cover = track
+        .pointer("/album/url_cover")
+        .and_then(|image| {
+            let uri = image.get("uri")?.as_str()?;
+            let template = image.get("template_prefix")?.as_str()?;
+            Some(format!(
+                "https://p3-luna.douyinpic.com/img/{uri}~{template}-resize:512:512.png"
+            ))
+        })
+        .or_else(|| {
+            track
+                .get("cover")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        })
+        .unwrap_or_default();
+    let playable = track
+        .get("playable")
+        .and_then(|v| v.as_bool())
+        .unwrap_or_else(|| track_json_playable(track));
+    Some(json!({
+        "id": id,
+        "title": title,
+        "artist": artist,
+        "album": album,
+        "artist_id": artist_id,
+        "album_id": album_id,
+        "cover": cover,
+        "duration_ms": duration_ms,
+        "is_vip": is_vip,
+        "playable": playable,
+    }))
 }
 
 #[cfg(feature = "libresoda")]
@@ -160,76 +382,9 @@ fn recommended_tracks(value: &Value) -> Vec<Value> {
         let Some(track) = item.pointer("/entity/track_wrapper/track") else {
             continue;
         };
-        let id = track
-            .get("id")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .trim()
-            .to_string();
-        if id.is_empty() {
-            continue;
+        if let Some(value) = track_object_to_value(track) {
+            tracks.push(value);
         }
-        let title = track
-            .get("name")
-            .and_then(|v| v.as_str())
-            .unwrap_or("未知曲目")
-            .to_string();
-        let artist = track
-            .get("artists")
-            .and_then(|v| v.as_array())
-            .map(|artists| {
-                artists
-                    .iter()
-                    .filter_map(|a| a.get("name").and_then(|v| v.as_str()))
-                    .collect::<Vec<_>>()
-                    .join(" / ")
-            })
-            .unwrap_or_default();
-        let artist_id = track
-            .pointer("/artists/0/id")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string();
-        let album = track
-            .pointer("/album/name")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string();
-        let album_id = track
-            .pointer("/album/id")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string();
-        let duration_ms = track
-            .get("duration")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.0)
-            .round() as u64;
-        let is_vip = track
-            .pointer("/label_info/only_vip_playable")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        let cover = track
-            .pointer("/album/url_cover")
-            .and_then(|image| {
-                let uri = image.get("uri")?.as_str()?;
-                let template = image.get("template_prefix")?.as_str()?;
-                Some(format!(
-                    "https://p3-luna.douyinpic.com/img/{uri}~{template}-resize:512:512.png"
-                ))
-            })
-            .unwrap_or_default();
-        tracks.push(json!({
-            "id": id,
-            "title": title,
-            "artist": artist,
-            "album": album,
-            "artist_id": artist_id,
-            "album_id": album_id,
-            "cover": cover,
-            "duration_ms": duration_ms,
-            "is_vip": is_vip,
-        }));
     }
     tracks
 }
@@ -357,26 +512,42 @@ fn dispatch(soda: &libresoda::Soda, req: &ServeRequest) -> Value {
                 Err(err) => fail_value(err.to_string(), "check cookie / network / signer"),
             }
         }
-        "liked" => match soda.get_user_playlists(1, 50) {
-            Ok(playlists) => {
-                let liked = playlists.iter().find(|playlist| {
-                    playlist.name.contains("喜欢") || playlist.name.contains("收藏")
-                });
-                let Some(liked) = liked else {
-                    return fail_value(
-                        "liked_playlist_not_found",
-                        "没找到「我喜欢的音乐」歌单（账号可能未登录）",
-                    );
-                };
-                match soda.get_playlist_songs(&liked.id) {
-                    Ok(songs) => json!({
-                        "playlist_id": liked.id,
-                        "tracks": songs.iter().map(song_to_track).collect::<Vec<_>>(),
-                    }),
-                    Err(err) => fail_value(err.to_string(), "读取我喜欢的音乐失败"),
+        "liked" => match load_named_playlist_tracks(soda, &["我喜欢的音乐", "喜欢"]) {
+            Ok((id, tracks)) => json!({ "playlist_id": id, "tracks": tracks }),
+            Err(err) => fail_value(err, "读取我喜欢的音乐失败"),
+        },
+        "douyin-liked" => match load_named_playlist_tracks(soda, &["抖音收藏的音乐", "抖音收藏"]) {
+            Ok((id, tracks)) => json!({ "playlist_id": id, "tracks": tracks }),
+            Err(err) => fail_value(err, "读取抖音收藏失败"),
+        },
+        "recent" => match soda.recently_played_media("", 100, "track", "") {
+            Ok(value) => {
+                if let Some(code) = value.get("status_code").and_then(|v| v.as_i64()) {
+                    if code != 0 {
+                        return fail_value(
+                            value
+                                .pointer("/status_info/status_msg")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("recent error")
+                                .to_string(),
+                            "读取历史播放失败",
+                        );
+                    }
                 }
+                json!({ "tracks": recent_tracks(&value) })
             }
             Err(err) => fail_value(err.to_string(), "check cookie"),
+        },
+        "create-playlist" => {
+            let name = req.query.trim();
+            if name.is_empty() {
+                return fail_value("empty_name", "create-playlist requires query as name");
+            }
+            match soda.create_playlist(name, false, &[]) {
+                Ok(id) if !id.trim().is_empty() => json!({ "id": id, "title": name }),
+                Ok(_) => fail_value("empty_id", "创建成功但未返回歌单 id"),
+                Err(err) => fail_value(err.to_string(), "创建歌单失败"),
+            }
         },
         "my-playlists" => match soda.get_my_playlists("", 50) {
             Ok(page) => {
@@ -693,11 +864,13 @@ fn dispatch(soda: &libresoda::Soda, req: &ServeRequest) -> Value {
             if req.token.trim().is_empty() {
                 return fail_value("missing_token", "qr-open-verify requires token");
             }
-            match soda.open_second_verify(&req.token) {
+            // 只返回本机验证页地址，由 App 内嵌 WebView 打开；
+            // 不要用 open_second_verify（会拉起系统默认浏览器）。
+            match soda.second_verify_url(&req.token) {
                 Ok(url) => json!({ "ok": true, "url": url }),
                 Err(err) => fail_value(
                     err.to_string(),
-                    "打开二次验证失败；可改用官方客户端导出 Cookie",
+                    "获取二次验证地址失败；可改用官方客户端导出 Cookie",
                 ),
             }
         }
@@ -812,9 +985,13 @@ fn run_oneshot(cmd: &str, args: &mut impl Iterator<Item = String>) -> ExitCode {
     };
     match cmd {
         "search" => req.query = args.next().unwrap_or_default(),
-        "playlist" | "lyrics" | "collect" | "uncollect" | "artist" | "album" => {
-            req.id_arg = args.next().unwrap_or_default();
-            req.liked = cmd == "collect";
+        "playlist" | "lyrics" | "collect" | "uncollect" | "artist" | "album" | "create-playlist" => {
+            if cmd == "create-playlist" {
+                req.query = args.next().unwrap_or_default();
+            } else {
+                req.id_arg = args.next().unwrap_or_default();
+                req.liked = cmd == "collect";
+            }
         }
         "download" => {
             while let Some(arg) = args.next() {

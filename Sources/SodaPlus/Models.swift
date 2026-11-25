@@ -5,6 +5,8 @@ enum NavDestination: String, CaseIterable, Identifiable, Hashable {
   case scenes
   case search
   case liked
+  case douyinLiked
+  case history
   case library
   case settings
   case nowPlaying
@@ -19,7 +21,9 @@ enum NavDestination: String, CaseIterable, Identifiable, Hashable {
     case .scenes: return "听歌模式"
     case .search: return "搜索"
     case .liked: return "我喜欢的音乐"
-    case .library: return "我的歌单"
+    case .douyinLiked: return "抖音收藏的音乐"
+    case .history: return "历史播放"
+    case .library: return "创建的歌单"
     case .settings: return "设置"
     case .nowPlaying: return "正在播放"
     case .artist: return "音乐人"
@@ -33,6 +37,8 @@ enum NavDestination: String, CaseIterable, Identifiable, Hashable {
     case .scenes: return "radio"
     case .search: return "magnifyingglass"
     case .liked: return "heart"
+    case .douyinLiked: return "play.rectangle.on.rectangle"
+    case .history: return "clock"
     case .library: return "list.bullet"
     case .settings: return "gearshape"
     case .nowPlaying: return "music.note"
@@ -41,9 +47,9 @@ enum NavDestination: String, CaseIterable, Identifiable, Hashable {
     }
   }
 
-  /// 侧栏可见项（不含播放页 / 详情页）。
-  static var sidebarItems: [NavDestination] {
-    [.home, .scenes, .search, .liked, .library, .settings]
+  /// 侧栏「我的音乐」固定项（不含创建的歌单列表 / 设置 / 搜索）。
+  static var myMusicItems: [NavDestination] {
+    [.liked, .douyinLiked, .history]
   }
 }
 
@@ -106,6 +112,11 @@ struct AccountInfo: Codable, Hashable {
     avatar = try c.decodeIfPresent(String.self, forKey: .avatar) ?? ""
     vip = try c.decodeIfPresent(Bool.self, forKey: .vip) ?? false
   }
+
+  var avatarURL: URL? {
+    guard !avatar.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+    return URL(string: avatar)
+  }
 }
 
 struct SodaTrack: Codable, Identifiable, Hashable {
@@ -118,9 +129,11 @@ struct SodaTrack: Codable, Identifiable, Hashable {
   var cover: String
   var durationMs: Int
   var isVIP: Bool
+  /// 汽水侧可播；灰色不可播（下架 / 抖音原声等）为 false。
+  var playable: Bool
 
   enum CodingKeys: String, CodingKey {
-    case id, title, artist, album, cover
+    case id, title, artist, album, cover, playable
     case artistId = "artist_id"
     case albumId = "album_id"
     case durationMs = "duration_ms"
@@ -136,7 +149,8 @@ struct SodaTrack: Codable, Identifiable, Hashable {
     albumId: String = "",
     cover: String = "",
     durationMs: Int = 0,
-    isVIP: Bool = false
+    isVIP: Bool = false,
+    playable: Bool = true
   ) {
     self.id = id
     self.title = title
@@ -147,6 +161,7 @@ struct SodaTrack: Codable, Identifiable, Hashable {
     self.cover = cover
     self.durationMs = durationMs
     self.isVIP = isVIP
+    self.playable = playable
   }
 
   init(from decoder: Decoder) throws {
@@ -160,6 +175,7 @@ struct SodaTrack: Codable, Identifiable, Hashable {
     cover = try c.decodeIfPresent(String.self, forKey: .cover) ?? ""
     durationMs = try c.decodeIfPresent(Int.self, forKey: .durationMs) ?? 0
     isVIP = try c.decodeIfPresent(Bool.self, forKey: .isVIP) ?? false
+    playable = try c.decodeIfPresent(Bool.self, forKey: .playable) ?? true
   }
 
   var coverURL: URL? {
@@ -226,6 +242,13 @@ struct PlaylistItem: Codable, Identifiable, Hashable {
     case trackCount = "track_count"
   }
 
+  init(id: String, title: String, cover: String, trackCount: Int) {
+    self.id = id
+    self.title = title
+    self.cover = cover
+    self.trackCount = trackCount
+  }
+
   init(from decoder: Decoder) throws {
     let c = try decoder.container(keyedBy: CodingKeys.self)
     id = try c.decode(String.self, forKey: .id)
@@ -237,6 +260,12 @@ struct PlaylistItem: Codable, Identifiable, Hashable {
   var coverURL: URL? {
     guard !cover.isEmpty else { return nil }
     return URL(string: cover)
+  }
+
+  /// 系统歌单：喜欢 / 抖音收藏；侧栏「创建的歌单」应排除。
+  var isSystemPlaylist: Bool {
+    let t = title
+    return t.contains("我喜欢") || t.contains("抖音收藏")
   }
 }
 

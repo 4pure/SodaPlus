@@ -28,12 +28,12 @@ open installers/SodaPlus.app
 
 ## 登录
 
-1. 设置 → 生成二维码（需本机 **Google Chrome**；可用 `QISHUI_CHROMIUM_PATH` 指定路径。macOS 扫码前会先打开/激活一次 Chrome，避免 headless 占住 Dock）
+1. 设置 → 生成二维码（纯 HTTP 登录，不依赖本机 Chrome）
 2. 用**汽水音乐 App**扫码并在手机上点确认（二维码内容是 `scan_url` 原样，对齐 SodaM）
-3. 若提示二次验证，会自动打开验证窗口；完成后继续等轮询成功
+3. 若需要二次验证，**在 App 登录弹层内**完成（内嵌 WebView 加载本机 `security_host`）；完成后继续等轮询成功
 4. 或粘贴官方客户端 Cookie 到设置页
 
-技术点：扫码登录走常驻 `sodaplus-bridge serve`，**create/check 必须同进程**，否则 Chromium CDP 的 cookie jar 对不上（见 libresoda `QR-LOGIN.md`）。轮询间隔 6 秒，避免 `error_code=7` 限流。
+技术点：扫码登录走常驻 `sodaplus-bridge serve`，**create/check 必须同进程**，否则登录会话 cookie jar 对不上（见 libresoda `QR-LOGIN.md`）。轮询间隔 6 秒，避免 `error_code=7` 限流。
 
 VIP 整曲依赖签名服务；默认已写入 SodaM 公共签名地址，也可自建 `libmssdk`。
 
