@@ -28,22 +28,39 @@ final class PlayQueue: ObservableObject {
 
   var isEmpty: Bool { tracks.isEmpty }
 
-  var played: [SodaTrack] {
-    guard !tracks.isEmpty, index > 0 else { return [] }
-    return Array(tracks.prefix(index))
+  /// 预取用：当前之后按播放顺序的后续曲（不含当前）。
+  var upcoming: [SodaTrack] {
+    Array(displayEntries.dropFirst().map(\.track))
   }
 
-  var upcoming: [SodaTrack] {
+  /// 弹窗列表：当前曲置顶，其后按实际播放顺序（随机用 shuffleRound）。
+  /// 用队列下标作身份，避免同曲重复 id 造成 LazyVStack 空白行。
+  var displayEntries: [(queueIndex: Int, track: SodaTrack)] {
     guard !tracks.isEmpty else { return [] }
+    guard tracks.indices.contains(index) else {
+      return tracks.enumerated().map { (queueIndex: $0.offset, track: $0.element) }
+    }
+    var entries: [(queueIndex: Int, track: SodaTrack)] = [
+      (queueIndex: index, track: tracks[index])
+    ]
     switch mode {
+    case .shuffle:
+      for i in shuffleRound where tracks.indices.contains(i) {
+        entries.append((queueIndex: i, track: tracks[i]))
+      }
     case .listLoop, .repeatOne:
       if index + 1 < tracks.count {
-        return Array(tracks[(index + 1)...])
+        for i in (index + 1)..<tracks.count {
+          entries.append((queueIndex: i, track: tracks[i]))
+        }
       }
-      return []
-    case .shuffle:
-      return shuffleRound.compactMap { tracks.indices.contains($0) ? tracks[$0] : nil }
+      if index > 0 {
+        for i in 0..<index {
+          entries.append((queueIndex: i, track: tracks[i]))
+        }
+      }
     }
+    return entries
   }
 
   func replace(_ newTracks: [SodaTrack], start: Int = 0) {
@@ -90,6 +107,24 @@ final class PlayQueue: ObservableObject {
     index = newIndex
   }
 
+  /// 运行时发现不可播时就地打标（列表 / 队列同步灰显）。
+  func markUnplayable(id: String) {
+    guard let i = tracks.firstIndex(where: { $0.id == id }) else { return }
+    tracks[i].playable = false
+  }
+
+  /// 从 `start` 起找下一首可播（含 start）；没有则 nil。
+  func firstPlayableIndex(from start: Int = 0) -> Int? {
+    guard !tracks.isEmpty else { return nil }
+    let n = tracks.count
+    let origin = min(max(0, start), n - 1)
+    for offset in 0..<n {
+      let i = (origin + offset) % n
+      if tracks[i].playable { return i }
+    }
+    return nil
+  }
+
   @discardableResult
   func advance() -> SodaTrack? {
     guard !tracks.isEmpty else { return nil }
@@ -121,6 +156,23 @@ final class PlayQueue: ObservableObject {
     return current
   }
 
+  /// 前进并跳过不可播；整圈都不可播则返回 nil（index 停在原处）。
+  /// 步进一律按「下一首」语义（单曲循环也离开当前），避免卡在灰歌上。
+  @discardableResult
+  func advancePlayable(userInitiated: Bool = false) -> SodaTrack? {
+    _ = userInitiated
+    guard !tracks.isEmpty else { return nil }
+    guard tracks.contains(where: \.playable) else { return nil }
+    let origin = index
+    for _ in 0..<tracks.count {
+      guard let track = nextUser() else { return nil }
+      if track.playable { return track }
+      if index == origin { break }
+    }
+    index = origin
+    return nil
+  }
+
   /// 用户点「下一首」：单曲循环也前进。
   @discardableResult
   func nextUser() -> SodaTrack? {
@@ -150,6 +202,21 @@ final class PlayQueue: ObservableObject {
       }
     }
     return current
+  }
+
+  /// 上一首并跳过不可播。
+  @discardableResult
+  func previousPlayable() -> SodaTrack? {
+    guard !tracks.isEmpty else { return nil }
+    guard tracks.contains(where: \.playable) else { return nil }
+    let origin = index
+    for _ in 0..<tracks.count {
+      guard let track = previous() else { return nil }
+      if track.playable { return track }
+      if index == origin { break }
+    }
+    index = origin
+    return nil
   }
 
   private func nextShuffleIndex() -> Int? {
