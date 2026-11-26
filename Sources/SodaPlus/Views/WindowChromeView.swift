@@ -63,9 +63,10 @@ final class ChromeProbeView: NSView {
     guard let window else { return }
     window.titleVisibility = .hidden
     window.titlebarAppearsTransparent = true
-    if !window.styleMask.contains(.fullSizeContentView) {
-      window.styleMask.insert(.fullSizeContentView)
-    }
+    // hiddenTitleBar / 自绘红绿灯后，系统偶发丢掉 closable/miniaturizable，红黄与 ⌘W 会一起失效。
+    window.styleMask.formUnion([
+      .titled, .closable, .miniaturizable, .resizable, .fullSizeContentView,
+    ])
     window.titlebarSeparatorStyle = .none
     window.isMovableByWindowBackground = true
     window.backgroundColor = windowBackground
@@ -105,16 +106,26 @@ final class ChromeProbeView: NSView {
     walk(themeFrame, depth: 0)
   }
 
-  /// 藏起系统红绿灯，改用矢量按钮；随屏幕 backingScale 重绘，外接屏不发糊。
+  /// 藏起系统红绿灯外观，改用矢量按钮；系统按钮保持可用，否则 Cmd+W / 菜单关窗会灰掉。
   private func installCustomTrafficLights(in window: NSWindow) {
+    // 绿键进系统全屏需要 fullscreen 能力；缺了 toggleFullScreen 会空转。
+    if !window.collectionBehavior.contains(.fullScreenPrimary) {
+      window.collectionBehavior.insert(.fullScreenPrimary)
+    }
+
     let ordered: [NSWindow.ButtonType] = [.closeButton, .miniaturizeButton, .zoomButton]
     let systemButtons = ordered.compactMap { window.standardWindowButton($0) }
     guard let sample = systemButtons.first, let container = sample.superview else { return }
 
     for button in systemButtons {
-      button.isHidden = true
-      button.alphaValue = 0
-      button.isEnabled = false
+      // 不要 isHidden / alpha=0：都会让标准按钮变成 disabled，⌘W 与红黄随之失效。
+      // 挪到屏外保留能力，可见点击由自绘按钮承接。
+      button.isHidden = false
+      button.alphaValue = 1
+      button.isEnabled = true
+      var frame = button.frame
+      frame.origin = CGPoint(x: -10_000, y: -10_000)
+      button.frame = frame
     }
 
     let host: TrafficLightsHostView
@@ -123,7 +134,8 @@ final class ChromeProbeView: NSView {
     } else {
       customLightsHost?.removeFromSuperview()
       let created = TrafficLightsHostView(frame: .zero)
-      container.addSubview(created)
+      // 盖在系统按钮之上接收点击。
+      container.addSubview(created, positioned: .above, relativeTo: nil)
       customLightsHost = created
       host = created
     }
@@ -184,13 +196,20 @@ private final class TrafficLightsHostView: NSView {
 
   @objc private func trafficAction(_ sender: TrafficLightButton) {
     guard let window = targetWindow ?? self.window else { return }
+    // 不依赖被藏起的系统按钮 performClick；直接改窗口状态。
     switch sender.kind {
     case .close:
-      window.performClose(nil)
+      AppDelegate.dismissMainWindow(window)
     case .miniaturize:
-      window.performMiniaturize(nil)
+      window.miniaturize(nil)
     case .zoom:
-      window.performZoom(nil)
+      // 对齐现代 macOS：绿键全屏；Option+绿键才是传统缩放铺满。
+      let optionDown = NSEvent.modifierFlags.contains(.option)
+      if optionDown {
+        window.performZoom(nil)
+      } else {
+        window.toggleFullScreen(nil)
+      }
     }
   }
 }
