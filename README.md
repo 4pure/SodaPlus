@@ -20,11 +20,18 @@
 ./scripts/fetch-libresoda.sh   # 若尚未 vendoring
 ./scripts/build-bridge.sh
 swift run                      # 开发
-./scripts/package-mac.sh arm --app-only
-open installers/SodaPlus.app
+
+make build-mac                 # Universal DMG → installers/
+make build-mac-arm             # Apple Silicon DMG
+make build-mac-intel           # Intel DMG
+make build-mac-app             # Universal .app（不打 DMG）
+make build-mac-arm-app         # Apple Silicon .app
+
+脚本入口：`./scripts/package.sh [arm|intel|universal] [--app-only]`（Makefile 薄封装）。
+open installers/SodaPlus.app   # 仅 :app / --app-only 后可用
 ```
 
-版本唯一源：`Config/Version.xcconfig`。
+版本唯一源：`Config/Version.xcconfig`。完整打包只出 DMG；`--app-only` / `build-mac-*-app` 才把 `.app` 发到 `installers/`。
 
 ## 登录
 
