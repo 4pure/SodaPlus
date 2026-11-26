@@ -35,7 +35,8 @@ struct ChromeSearchField: NSViewRepresentable {
 
   func updateNSView(_ field: LazyFocusTextField, context: Context) {
     context.coordinator.parent = self
-    if field.stringValue != text {
+    // 编辑中（含 IME 拼音组字）禁止回写 stringValue，否则会打断 marked text。
+    if field.currentEditor() == nil, field.stringValue != text {
       field.stringValue = text
     }
     applyAppearance(to: field)
@@ -116,11 +117,8 @@ final class LazyFocusTextField: NSTextField {
     userRequestedFocus = false
   }
 
-  override func resignFirstResponder() -> Bool {
-    let ok = super.resignFirstResponder()
-    if ok {
-      userRequestedFocus = false
-    }
-    return ok
-  }
+  // 注意：成为第一响应者后 AppKit 会立刻把焦点交给 field editor，并对本控件调用
+  // `resignFirstResponder`。此处绝不能清 `userRequestedFocus`，否则 IME 组字过程中
+  // 焦点链重校验时 `acceptsFirstResponder == false`，拼音会被逐字母打断。
+  // 真正结束编辑只走 `endEditingSession`（EndEditing / 回车 / Esc / 外部 resign）。
 }
